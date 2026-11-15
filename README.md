@@ -57,4 +57,27 @@ in to `ghcr.io` with a token that has `read:packages`.
 
 ## Updating the data
 
-Replace `nutrient_table.pdf` with the new PDF and push. The image build parses it again.
+1. Replace `nutrient_table.pdf` with the new PDF.
+2. Run `python parse_pdf.py` locally. It prints what changed since last time:
+   ```
+   Compared with products.lock: 2 new, 1 removed, 3 changed
+     + McTriple® (Classic menu)
+     - Snack Wrap (Limited-time offers)
+     ~ Cheeseburger (Classic menu): 306 -> 315 kcal
+   ```
+3. Review the list, then commit `nutrient_table.pdf` and `products.lock` and push.
+
+The parser checks its own output and stops with an error, writing nothing, when:
+
+- a product row doesn't have exactly 26 values, or values appear without a name
+- a row in the allergen table matches no product (otherwise that product would
+  silently show "no allergens")
+- no products or no allergen table are found (e.g. headings were reworded)
+- more than 20% of the products in `products.lock` disappeared; if that's a real
+  menu change, run `python parse_pdf.py --force` and commit the new `products.lock`
+
+The same checks run during the Docker build, so a PDF the parser can't read fails
+the GitHub Action and Coolify keeps serving the previous version.
+
+New category headings show in Polish until an English name is added to
+`CATEGORY_EN` in `parse_pdf.py`.
