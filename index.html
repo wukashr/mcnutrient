@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>McDonald's Poland — nutrition &amp; allergens</title>
+<style>
+  :root { --bg:#fafaf7; --card:#fff; --ink:#1d1d1b; --mute:#6b6b66; --line:#e6e4dd; --acc:#c8102e; --warn:#b26b00; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:16px 20px 8px; }
+  h1 { margin:0; font-size:20px; } h1 span { color:var(--acc); }
+  .sub { color:var(--mute); font-size:13px; }
+  .controls { display:flex; flex-wrap:wrap; gap:8px; padding:8px 20px; position:sticky; top:0; background:var(--bg); border-bottom:1px solid var(--line); z-index:2; }
+  input, select, button { font:inherit; padding:7px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  #q { flex:1 1 220px; }
+  details { padding:4px 20px; } summary { cursor:pointer; color:var(--mute); font-size:13px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; padding:8px 0; }
+  .chips label { font-size:13px; border:1px solid var(--line); border-radius:999px; padding:3px 10px; background:#fff; cursor:pointer; }
+  .chips input { display:none; } .chips label:has(input:checked) { background:var(--ink); color:#fff; }
+  main { padding:8px 20px 120px; }
+  .count { color:var(--mute); font-size:13px; margin:6px 0; }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  th, td { padding:8px 10px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap; font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align:left; white-space:normal; }
+  th { font-size:12px; color:var(--mute); font-weight:600; cursor:pointer; user-select:none; }
+  tr.row { cursor:pointer; } tr.row:hover { background:#f5f4ef; }
+  .cat { color:var(--mute); font-size:12px; display:block; }
+  .kcal { font-weight:700; }
+  .detail td { background:#fbfaf6; text-align:left; white-space:normal; font-size:13px; }
+  .tag { display:inline-block; border-radius:6px; padding:1px 7px; margin:2px 3px 2px 0; font-size:12px; background:#fde8eb; color:#8a0c20; }
+  .tag.may { background:#fff3dc; color:var(--warn); }
+  .add { padding:3px 9px; font-size:13px; }
+  .hide-sm { } @media (max-width:640px){ .hide-sm { display:none; } th, td { padding:7px 6px; } }
+  #meal { position:fixed; left:0; right:0; bottom:0; background:var(--ink); color:#fff; padding:10px 20px; display:none; font-size:14px; z-index:3; }
+  #meal button { background:transparent; color:#fff; border-color:#555; padding:3px 9px; margin-left:8px; }
+  #meal .items { color:#bbb; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span>M</span> Nutrition facts</h1>
+  <div class="sub">Search McDonald's Poland products. Data from the official nutrition table (PDF), product names in Polish. API: <a href="/docs">/docs</a></div>
+</header>
+
+<div class="controls">
+  <input id="q" type="search" placeholder="Search… e.g. big mac, mcflurry, cappuccino" autofocus>
+  <select id="category"><option value="">All categories</option></select>
+  <input id="max" type="number" placeholder="max kcal" style="width:100px" min="0">
+  <select id="basis">
+    <option value="per_portion">per portion</option>
+    <option value="per_100g">per 100 g</option>
+  </select>
+</div>
+<details>
+  <summary>Exclude allergens</summary>
+  <div class="chips" id="allergens"></div>
+  <label style="font-size:13px"><input type="checkbox" id="strict"> also exclude "may contain"</label>
+</details>
+
+<main>
+  <div class="count" id="count"></div>
+  <table>
+    <thead><tr id="head"></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+<div id="meal"></div>
+
+<script>
+const COLS = [
+  ["energy_kcal", "kcal"], ["protein_g", "Protein"], ["fat_g", "Fat"],
+  ["carbs_g", "Carbs"], ["sugars_g", "Sugars", true], ["salt_g", "Salt", true],
+];
+const TOP_ALLERGENS = { "1":"gluten","3":"eggs","5":"peanuts","6":"soy","7":"milk",
+  "8":"tree nuts","9":"celery","10":"mustard","11":"sesame","12":"sulfites" };
+const state = { sort: "energy_kcal", order: "asc", open: null, meal: [] };
+const $ = id => document.getElementById(id);
+const fmt = v => typeof v === "number" ? v.toLocaleString("en-US") : v;
+
+function renderHead() {
+  $("head").innerHTML = `<th>Product</th>` + COLS.map(([k, label, sm]) =>
+    `<th data-k="${k}" class="${sm ? "hide-sm" : ""}">${label}${state.sort === k ? (state.order === "asc" ? " ▲" : " ▼") : ""}</th>`
+  ).join("") + `<th></th>`;
+  $("head").querySelectorAll("th[data-k]").forEach(th => th.onclick = () => {
+    const k = th.dataset.k;
+    state.order = state.sort === k && state.order === "asc" ? "desc" : "asc";
+    state.sort = k; renderHead(); search();
+  });
+}
+
+let timer;
+function search() {
+  clearTimeout(timer);
+  timer = setTimeout(async () => {
+    const p = new URLSearchParams({ sort: state.sort, order: state.order, basis: $("basis").value, limit: 500 });
+    if ($("q").value) p.set("q", $("q").value);
+    if ($("category").value) p.set("category", $("category").value);
+    if ($("max").value) p.set("max_kcal", $("max").value);
+    const ex = [...document.querySelectorAll("#allergens input:checked")].map(i => i.value);
+    if (ex.length) { p.set("exclude_allergens", ex.join(",")); p.set("strict", $("strict").checked); }
+    const data = await (await fetch("/api/items?" + p)).json();
+    render(data);
+  }, 120);
+}
+
+function render({ total, items }) {
+  const b = $("basis").value;
+  $("count").textContent = `${total} product${total === 1 ? "" : "s"} · values ${b === "per_portion" ? "per portion" : "per 100 g"}`;
+  $("rows").innerHTML = items.map(it => {
+    const n = it.nutrition;
+    const row = `<tr class="row" data-id="${it.id}"><td>${it.name}<span class="cat">${it.category}${it.limited_availability ? " · selected restaurants only" : ""}</span></td>` +
+      COLS.map(([k, , sm]) => `<td class="${k === "energy_kcal" ? "kcal" : ""} ${sm ? "hide-sm" : ""}">${fmt(n[k][b])}</td>`).join("") +
+      `<td><button class="add" data-add="${it.id}" title="Add to meal">+</button></td></tr>`;
+    return row + (state.open === it.id ? detail(it) : "");
+  }).join("");
+  $("rows").querySelectorAll("tr.row").forEach(tr => tr.onclick = e => {
+    if (e.target.dataset.add) { addToMeal(+e.target.dataset.add, tr); return; }
+    state.open = state.open === +tr.dataset.id ? null : +tr.dataset.id; render({ total, items });
+  });
+}
+
+function detail(it) {
+  const n = it.nutrition, labels = { energy_kj:"Energy (kJ)", energy_kcal:"Energy (kcal)", fat_g:"Fat (g)",
+    saturated_fat_g:"Saturated fat (g)", carbs_g:"Carbohydrates (g)", sugars_g:"Sugars (g)", fiber_g:"Fiber (g)", protein_g:"Protein (g)", salt_g:"Salt (g)" };
+  const tbl = Object.entries(labels).map(([k, l]) =>
+    `<tr><td>${l}</td><td>${fmt(n[k].per_100g)}</td><td>${fmt(n[k].per_portion)}${n[k].per_portion_by_size ? ` <small>(${n[k].per_portion_by_size.join(" / ")})</small>` : ""}</td><td>${n[k].ri_percent ?? "–"}${n[k].ri_percent != null ? "%" : ""}</td></tr>`).join("");
+  const tags = (list, cls) => list.length ? list.map(a => `<span class="tag ${cls}">${a.name}</span>`).join("") : "<i>none</i>";
+  return `<tr class="detail"><td colspan="${COLS.length + 2}">
+    <table style="border:none;max-width:420px;margin-bottom:8px"><tr><th>Nutrient</th><th>100 g</th><th>Portion</th><th>RI</th></tr>${tbl}</table>
+    <div><b>Contains:</b> ${tags(it.allergens.contains, "")}</div>
+    <div><b>May contain:</b> ${tags(it.allergens.may_contain, "may")}</div>
+  </td></tr>`;
+}
+
+async function addToMeal(id) { state.meal.push(id); updateMeal(); }
+async function updateMeal() {
+  const m = $("meal");
+  if (!state.meal.length) { m.style.display = "none"; return; }
+  const d = await (await fetch("/api/meal?ids=" + state.meal.join(","))).json();
+  const t = d.totals_per_portion;
+  m.style.display = "block";
+  m.innerHTML = `<b>Meal: ${fmt(Math.round(t.energy_kcal))} kcal</b> · protein ${fmt(t.protein_g)} g · fat ${fmt(t.fat_g)} g · carbs ${fmt(t.carbs_g)} g · salt ${fmt(t.salt_g)} g
+    <button onclick="state.meal.pop();updateMeal()">undo</button><button onclick="state.meal=[];updateMeal()">clear</button>
+    <div class="items">${d.items.join(" + ")}</div>`;
+}
+
+(async () => {
+  const cats = await (await fetch("/api/categories")).json();
+  $("category").innerHTML += cats.map(c => `<option>${c.name}</option>`).join("");
+  $("allergens").innerHTML = Object.entries(TOP_ALLERGENS).map(([c, n]) =>
+    `<label><input type="checkbox" value="${c}">${n}</label>`).join("");
+  document.querySelectorAll("input, select").forEach(el => el.addEventListener("input", search));
+  renderHead(); search();
+})();
+</script>
+</body>
+</html>
