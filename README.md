@@ -12,8 +12,8 @@ category in `category_pl`. Search ignores Polish accents, so `wiesmac` finds `Wi
 With Docker:
 
 ```bash
-docker build -t mcd .
-docker run -p 8000:8000 mcd
+docker build -t mcn .
+docker run -p 8000:8000 mcn
 ```
 
 Without Docker (needs only Python 3.15):
