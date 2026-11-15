@@ -50,9 +50,9 @@ jobs:
 
       - name: Restart Coolify service (pull latest image)
         env:
-          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}           # e.g. https://coolify.example.com
-          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}       # API token with deploy permission
-          SERVICE_UUID: ${{ vars.COOLIFY_SERVICE_UUID }}
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          SERVICE_UUID: ${{ secrets.COOLIFY_SERVICE_UUID }}
         run: |
           set -euo pipefail
           curl --fail-with-body -sS -X POST \
