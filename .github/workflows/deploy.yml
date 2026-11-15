@@ -57,4 +57,4 @@ jobs:
           set -euo pipefail
           curl --fail-with-body -sS -X POST \
             -H "Authorization: Bearer ${COOLIFY_TOKEN}" \
-            "${COOLIFY_URL%/}/api/v1/services/${SERVICE_UUID}/restart?latest=true"
+            "${COOLIFY_URL%/}/api/v1/applications/${SERVICE_UUID}/restart?latest=true"
