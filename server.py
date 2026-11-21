@@ -109,3 +109,13 @@ def meal(ids: str = Query(..., description="Comma-separated item ids, e.g. 3,49,
 @app.get("/", include_in_schema=False)
 def index():
     return FileResponse(HERE / "index.html")
+
+
+@app.get("/styles.css", include_in_schema=False)
+def styles():
+    return FileResponse(HERE / "styles.css", media_type="text/css")
+
+
+@app.get("/app.js", include_in_schema=False)
+def app_js():
+    return FileResponse(HERE / "app.js", media_type="text/javascript")
