@@ -1,0 +1,273 @@
+:root {
+    color-scheme: dark;
+    --bg: #171817;
+    --card: #202120;
+    --ink: #f1f1eb;
+    --mute: #aaa9a1;
+    --line: #3a3b38;
+    --acc: #ff4d69;
+    --warn: #e6a23c;
+    --control: #252624;
+    --hover: #2b2c29;
+    --detail: #1c1d1b;
+    --contain: #54232b;
+    --contain-ink: #ffbec8;
+    --may: #4a4028;
+    --may-ink: #ffd58a;
+    --checked: #f1f1eb;
+    --checked-ink: #171817;
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #fafaf7;
+    --card: #fff;
+    --ink: #1d1d1b;
+    --mute: #6b6b66;
+    --line: #e6e4dd;
+    --acc: #c8102e;
+    --warn: #b26b00;
+    --control: #fff;
+    --hover: #f5f4ef;
+    --detail: #fbfaf6;
+    --contain: #fde8eb;
+    --contain-ink: #8a0c20;
+    --may: #fff3dc;
+    --may-ink: #b26b00;
+    --checked: #1d1d1b;
+    --checked-ink: #fff;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font: 15px/1.4 system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+}
+
+header {
+    padding: 16px 20px 8px;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+}
+
+header > div {
+    flex: 1;
+}
+
+h1 {
+    margin: 0;
+    font-size: 20px;
+}
+
+h1 span {
+    color: var(--acc);
+}
+
+.sub {
+    color: var(--mute);
+    font-size: 13px;
+}
+
+a {
+    color: var(--acc);
+}
+
+#theme-toggle {
+    flex: none;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    font-size: 18px;
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 20px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+    z-index: 2;
+}
+
+input, select, button {
+    font: inherit;
+    padding: 7px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--control);
+    color: var(--ink);
+}
+
+#q {
+    flex: 1 1 220px;
+}
+
+details {
+    padding: 4px 20px;
+}
+
+summary {
+    cursor: pointer;
+    color: var(--mute);
+    font-size: 13px;
+}
+
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 0;
+}
+
+.chips label {
+    font-size: 13px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 10px;
+    background: var(--control);
+    cursor: pointer;
+}
+
+.chips input {
+    display: none;
+}
+
+.chips label:has(input:checked) {
+    background: var(--checked);
+    color: var(--checked-ink);
+}
+
+main {
+    padding: 8px 20px 120px;
+}
+
+.count {
+    color: var(--mute);
+    font-size: 13px;
+    margin: 6px 0;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+th, td {
+    padding: 8px 10px;
+    text-align: right;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+th:first-child, td:first-child {
+    text-align: left;
+    white-space: normal;
+}
+
+th {
+    font-size: 12px;
+    color: var(--mute);
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+}
+
+tr.row {
+    cursor: pointer;
+}
+
+tr.row:hover {
+    background: var(--hover);
+}
+
+.cat {
+    color: var(--mute);
+    font-size: 12px;
+    display: block;
+}
+
+.kcal {
+    font-weight: 700;
+}
+
+.detail td {
+    background: var(--detail);
+    text-align: left;
+    white-space: normal;
+    font-size: 13px;
+}
+
+.tag {
+    display: inline-block;
+    border-radius: 6px;
+    padding: 1px 7px;
+    margin: 2px 3px 2px 0;
+    font-size: 12px;
+    background: var(--contain);
+    color: var(--contain-ink);
+}
+
+.tag.may {
+    background: var(--may);
+    color: var(--may-ink);
+}
+
+.add {
+    padding: 3px 9px;
+    font-size: 13px;
+}
+
+.hide-sm {
+}
+
+@media (max-width: 640px) {
+    .hide-sm {
+        display: none;
+    }
+
+    th, td {
+        padding: 7px 6px;
+    }
+}
+
+#meal {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: var(--ink);
+    color: var(--bg);
+    padding: 10px 20px;
+    display: none;
+    font-size: 14px;
+    z-index: 3;
+}
+
+#meal button {
+    background: transparent;
+    color: var(--bg);
+    border-color: var(--mute);
+    padding: 3px 9px;
+    margin-left: 8px;
+}
+
+#meal .items {
+    color: var(--mute);
+    font-size: 12px;
+}

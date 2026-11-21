@@ -14,7 +14,7 @@ COPY requirements.txt .
 # the server doesn't need the PDF parser
 RUN grep -v pdfplumber requirements.txt > server-requirements.txt \
  && pip install --no-cache-dir -r server-requirements.txt
-COPY server.py textnorm.py index.html ./
+COPY server.py textnorm.py index.html styles.css app.js ./
 COPY --from=parse /build/data.json .
 RUN useradd --system --uid 10001 app
 USER app
