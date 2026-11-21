@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Parse McDonald's Poland nutrition + allergen PDF into data.json.
 
-Usage:  python parse_pdf.py [nutrient_table.pdf] [data.json] [--force]
+Usage:  python parse_pdf.py [nutrition_table.pdf] [data.json] [--force] [--check]
 Needs:  pdfplumber (pip install -r requirements.txt)
 
 The parser validates its own output and exits with an error (writing nothing) when
 the PDF doesn't look like what it was written for. It also keeps products.lock, a
 readable list of every product, to report what changed between PDF versions.
+products.lock starts with the PDF's SHA-256; --check (used in the Docker build) fails
+when the PDF or the parser output no longer matches the committed lock.
 """
 import argparse, hashlib, json, re, sys, difflib
 from collections import Counter
@@ -282,6 +284,8 @@ def keyed(lines):
     """(category, name, n-th occurrence) -> line; some names appear twice, e.g. Ketchup."""
     seen, out = Counter(), {}
     for ln in lines:
+        if ln.startswith("#"):
+            continue
         cat, name = ln.split("\t")[:2]
         seen[(cat, name)] += 1
         out[(cat, name, seen[(cat, name)])] = ln
@@ -306,24 +310,39 @@ def report(old_lines, new_lines):
     return removed
 
 
-def fail(errors):
-    print(f"\nERROR: the parsed data failed validation ({len(errors)} problems). "
-          "Nothing was written.", file=sys.stderr)
+LOCK_HEADER = "# pdf-sha256: "
+
+
+def read_lock(lock):
+    """Return (pdf hash or None, product lines)."""
+    if not lock.exists():
+        return None, []
+    lines = lock.read_text(encoding="utf-8").splitlines()
+    pdf_hash = lines[0][len(LOCK_HEADER):] if lines and lines[0].startswith(LOCK_HEADER) else None
+    return pdf_hash, [ln for ln in lines if ln and not ln.startswith("#")]
+
+
+def fail(errors, hint="If the PDF layout changed, parse_pdf.py needs updating.",
+         title="the parsed data failed validation"):
+    print(f"\nERROR: {title} ({len(errors)} problems). Nothing was written.", file=sys.stderr)
     for e in errors[:15]:
         print(f"  - {e}", file=sys.stderr)
     if len(errors) > 15:
         print(f"  … and {len(errors) - 15} more", file=sys.stderr)
-    print("If the PDF layout changed, parse_pdf.py needs updating.", file=sys.stderr)
+    print(hint, file=sys.stderr)
     sys.exit(1)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("pdf", nargs="?", default="nutrient_table.pdf")
+    ap.add_argument("pdf", nargs="?", default="nutrition_table.pdf")
     ap.add_argument("out", nargs="?", default="data.json")
     ap.add_argument("--lock", default=str(Path(__file__).with_name("products.lock")))
     ap.add_argument("--force", action="store_true",
                     help="accept the result even if many products disappeared")
+    ap.add_argument("--check", action="store_true",
+                    help="CI mode: require products.lock to match this PDF and the parser "
+                         "output; never rewrites the lock")
     args = ap.parse_args()
 
     with pdfplumber.open(args.pdf) as doc:
@@ -366,8 +385,21 @@ def main():
 
     lock = Path(args.lock)
     new_lines = lock_lines(items)
-    if lock.exists():
-        old_lines = lock.read_text(encoding="utf-8").splitlines()
+    pdf_hash = hashlib.sha256(Path(args.pdf).read_bytes()).hexdigest()
+    old_hash, old_lines = read_lock(lock)
+
+    if args.check:
+        stale = "Run `python parse_pdf.py` locally, review the report and commit products.lock."
+        if old_hash != pdf_hash:
+            report(old_lines, new_lines)
+            fail(["nutrition_table.pdf changed but products.lock wasn't updated for it"], stale,
+                 "products.lock is out of date")
+        if old_lines != new_lines:
+            report(old_lines, new_lines)
+            fail(["same PDF, but the parser output differs from products.lock "
+                  "(parse_pdf.py or textnorm.py changed?)"], stale, "products.lock is out of date")
+        print("products.lock matches the PDF and the parser output")
+    elif old_lines:
         removed = report(old_lines, new_lines)
         if old_lines and len(removed) / len(old_lines) > MAX_REMOVED_SHARE and not args.force:
             fail([f"{len(removed)} of {len(old_lines)} products disappeared (limit "
@@ -376,7 +408,10 @@ def main():
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump({"source": Path(args.pdf).name, "legend": ALLERGEN_LEGEND,
                    "items": items}, f, ensure_ascii=False, indent=1)
-    lock.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    if args.check:
+        print(f"Wrote {args.out}")
+        return
+    lock.write_text(LOCK_HEADER + pdf_hash + "\n" + "\n".join(new_lines) + "\n", encoding="utf-8")
     print(f"Wrote {args.out} and {lock.name}")
 
 

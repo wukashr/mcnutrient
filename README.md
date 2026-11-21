@@ -1,7 +1,7 @@
 # McDonald's PL – nutrition search
 
 Search McDonald's Poland nutrition and allergen data in the browser or through a REST API.
-The data is parsed from the official PDF (`nutrient_table.pdf`) when the Docker image is built.
+The data is parsed from the official PDF (`nutrition_table.pdf`) when the Docker image is built.
 
 The PDF is in Polish, so product names stay in Polish. Everything else (UI, API,
 categories, allergen names) is in English; each item also keeps its original Polish
@@ -22,12 +22,12 @@ Without Docker (needs only Python 3.15):
 python3.15 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python parse_pdf.py nutrient_table.pdf data.json
+python parse_pdf.py nutrition_table.pdf data.json
 uvicorn server:app --reload
 ```
 
 Next time, only `source .venv/bin/activate` and `uvicorn server:app --reload` are needed.
-Re-run the parse step only when `nutrient_table.pdf` changes.
+Re-run the parse step only when `nutrition_table.pdf` changes.
 
 Open http://localhost:8000. API docs are at http://localhost:8000/docs.
 
@@ -57,7 +57,7 @@ in to `ghcr.io` with a token that has `read:packages`.
 
 ## Updating the data
 
-1. Replace `nutrient_table.pdf` with the new PDF.
+1. Replace `nutrition_table.pdf` with the new PDF.
 2. Run `python parse_pdf.py` locally. It prints what changed since last time:
    ```
    Compared with products.lock: 2 new, 1 removed, 3 changed
@@ -65,7 +65,11 @@ in to `ghcr.io` with a token that has `read:packages`.
      - Snack Wrap (Limited-time offers)
      ~ Cheeseburger (Classic menu): 306 -> 315 kcal
    ```
-3. Review the list, then commit `nutrient_table.pdf` and `products.lock` and push.
+3. Review the list, then commit `nutrition_table.pdf` and `products.lock` together and push.
+
+Committing the lock is mandatory: it starts with the PDF's SHA-256, and the Docker
+build runs `parse_pdf.py --check`, which fails if `products.lock` wasn't regenerated
+for the current PDF, or if a parser change altered the output.
 
 The parser checks its own output and stops with an error, writing nothing, when:
 
@@ -76,8 +80,8 @@ The parser checks its own output and stops with an error, writing nothing, when:
 - more than 20% of the products in `products.lock` disappeared; if that's a real
   menu change, run `python parse_pdf.py --force` and commit the new `products.lock`
 
-The same checks run during the Docker build, so a PDF the parser can't read fails
-the GitHub Action and Coolify keeps serving the previous version.
+The same checks run during the Docker build, so a PDF the parser can't read, or a
+stale lock, fails the GitHub Action and Coolify keeps serving the previous version.
 
 New category headings show in Polish until an English name is added to
 `CATEGORY_EN` in `parse_pdf.py`.
