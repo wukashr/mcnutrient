@@ -1,10 +1,18 @@
 #!/usr/bin/env python3
 """Parse McDonald's Poland nutrition + allergen PDF into data.json.
 
-Usage:  python parse_pdf.py nutrient_table.pdf data.json
+Usage:  python parse_pdf.py [nutrition_table.pdf] [data.json] [--force] [--check]
 Needs:  pdfplumber (pip install -r requirements.txt)
+
+The parser validates its own output and exits with an error (writing nothing) when
+the PDF doesn't look like what it was written for. It also keeps products.lock, a
+readable list of every product, to report what changed between PDF versions.
+products.lock starts with the PDF's SHA-256; --check (used in the Docker build) fails
+when the PDF or the parser output no longer matches the committed lock.
 """
-import json, re, sys, difflib
+import argparse, hashlib, json, re, sys, difflib
+from collections import Counter
+from pathlib import Path
 
 import pdfplumber
 
@@ -94,7 +102,8 @@ def build_item(name, toks, category_pl, section):
 
 
 def parse_nutrition(lines):
-    items, section, category = [], None, None
+    """Return (items, problems). Problems are rows the parser couldn't interpret."""
+    items, problems, section, category = [], [], None, None
     in_data, pending, subgroup, subgroup_prefix, stray = False, [], None, "", None
     for raw in lines:
         line = re.sub(r"\s+/(?=\d)", "/", raw.strip())  # "0,03 /0,1" -> "0,03/0,1"
@@ -109,6 +118,8 @@ def parse_nutrition(lines):
             in_data = False
             continue
         if flat.startswith("TABELA ALERGEN"):
+            if pending:
+                problems.append(f"product name without values: {' '.join(pending)!r}")
             break
         if flat.startswith("100 g porcja"):
             in_data = True
@@ -116,21 +127,30 @@ def parse_nutrition(lines):
         if not in_data:
             continue
         if line.startswith("*"):
-            in_data = False
+            if pending:
+                problems.append(f"product name without values: {' '.join(pending)!r}")
+            in_data, pending = False, []
             continue
         name, toks = split_values(line)
         if not name and len(toks) >= N_VALUES and pending:
             # wrapped name: "prefix" / numbers / "suffix" on three lines; the suffix
             # line is attached by the lowercase-continuation rule below
             name, pending = " ".join(pending), []
-        elif not name and toks:  # stray numbers on their own line, e.g. "0,06/0,1"
+        elif not name and len(toks) <= 2:  # stray cell fragment, e.g. "0,06/0,1"
             stray = toks[0]
+            continue
+        elif not name:
+            problems.append(f"values without a product name ({len(toks)} numbers): {flat!r}")
             continue
         if len(toks) == N_VALUES - 1 and name and stray:
             # Only case in the PDF: Coca-Cola Zero, salt portion "0,03/" + "0,06/0,1".
             # Salt per 100 ml is missing in the cell -> use 0.
             toks = toks[:-2] + ["0", toks[-2].split("/")[0] + "/" + stray, toks[-1]]
         stray = None if toks else stray
+        if name and 3 <= len(toks) < N_VALUES:
+            problems.append(f"expected {N_VALUES} values, found {len(toks)}: {flat!r}")
+            pending = []
+            continue
         if len(toks) >= N_VALUES and name:
             if len(toks) > N_VALUES:  # stray numbers belong to the name (e.g. "0,25l")
                 extra = toks[: len(toks) - N_VALUES]
@@ -138,9 +158,13 @@ def parse_nutrition(lines):
             full = " ".join(pending + [name])
             if subgroup and full.startswith(subgroup_prefix):
                 full += f" ({subgroup})"
-            items.append(build_item(full, toks, category, section))
+            if category is None:
+                problems.append(f"product before any category heading: {full!r}")
+            items.append(build_item(full, toks, category or "?", section))
             pending = []
         elif not toks and is_category(line):
+            if pending:
+                problems.append(f"product name without values: {' '.join(pending)!r}")
             category, pending, subgroup = line.title(), [], None
         elif not toks and line.endswith(":"):
             # "Lody o smaku waniliowym w kubeczku:" -> label "w kubeczku" for rows starting "Lody"
@@ -151,10 +175,10 @@ def parse_nutrition(lines):
             items[-1]["name"] = re.sub(r"\s+", " ", f"{items[-1]['name']} {line}")
             if subgroup and items[-1]["name"].startswith(subgroup_prefix):
                 items[-1]["name"] = items[-1]["name"].replace(f" ({subgroup})", "") + f" ({subgroup})"
-        elif not toks:
+        elif not toks and re.search(r"[^\W\d_]", line):  # has letters: part of a name
             pending.append(line)
-        # lines like "0,06/0,1" (stray footnote numbers) are ignored
-    return items
+        # anything else (e.g. "(%)" left over from the header) is ignored
+    return items, problems
 
 
 def parse_allergens(raw_lines):
@@ -242,35 +266,154 @@ def describe(codes):
     return [{"code": c, "name": ALLERGEN_LEGEND.get(c, c)} for c in expand_codes(codes)]
 
 
-def main(pdf, out):
-    with pdfplumber.open(pdf) as doc:
+MAX_REMOVED_SHARE = 0.20  # fail if more than 20% of the products in products.lock disappear
+
+
+def fingerprint(it):
+    """Short hash of everything except the id, to spot changed values."""
+    body = json.dumps([it["nutrition"], it["allergens"]], sort_keys=True)
+    return hashlib.sha1(body.encode()).hexdigest()[:8]
+
+
+def lock_lines(items):
+    return [f"{it['category']}\t{it['name']}\t{it['nutrition']['energy_kcal']['per_portion']}"
+            f"\t{fingerprint(it)}" for it in items]
+
+
+def keyed(lines):
+    """(category, name, n-th occurrence) -> line; some names appear twice, e.g. Ketchup."""
+    seen, out = Counter(), {}
+    for ln in lines:
+        if ln.startswith("#"):
+            continue
+        cat, name = ln.split("\t")[:2]
+        seen[(cat, name)] += 1
+        out[(cat, name, seen[(cat, name)])] = ln
+    return out
+
+
+def report(old_lines, new_lines):
+    old, new = keyed(old_lines), keyed(new_lines)
+    added = [k for k in new if k not in old]
+    removed = [k for k in old if k not in new]
+    changed = [k for k in new if k in old and new[k] != old[k]]
+    label = lambda k: f"{k[1]} ({k[0]})"
+    print(f"Compared with products.lock: {len(added)} new, {len(removed)} removed, "
+          f"{len(changed)} changed")
+    for k in added:
+        print(f"  + {label(k)}")
+    for k in removed:
+        print(f"  - {label(k)}")
+    for k in changed:
+        o, n = old[k].split("\t")[2], new[k].split("\t")[2]
+        print(f"  ~ {label(k)}" + (f": {o} -> {n} kcal" if o != n else ": values changed"))
+    return removed
+
+
+LOCK_HEADER = "# pdf-sha256: "
+
+
+def read_lock(lock):
+    """Return (pdf hash or None, product lines)."""
+    if not lock.exists():
+        return None, []
+    lines = lock.read_text(encoding="utf-8").splitlines()
+    pdf_hash = lines[0][len(LOCK_HEADER):] if lines and lines[0].startswith(LOCK_HEADER) else None
+    return pdf_hash, [ln for ln in lines if ln and not ln.startswith("#")]
+
+
+def fail(errors, hint="If the PDF layout changed, parse_pdf.py needs updating.",
+         title="the parsed data failed validation"):
+    print(f"\nERROR: {title} ({len(errors)} problems). Nothing was written.", file=sys.stderr)
+    for e in errors[:15]:
+        print(f"  - {e}", file=sys.stderr)
+    if len(errors) > 15:
+        print(f"  … and {len(errors) - 15} more", file=sys.stderr)
+    print(hint, file=sys.stderr)
+    sys.exit(1)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("pdf", nargs="?", default="nutrition_table.pdf")
+    ap.add_argument("out", nargs="?", default="data.json")
+    ap.add_argument("--lock", default=str(Path(__file__).with_name("products.lock")))
+    ap.add_argument("--force", action="store_true",
+                    help="accept the result even if many products disappeared")
+    ap.add_argument("--check", action="store_true",
+                    help="CI mode: require products.lock to match this PDF and the parser "
+                         "output; never rewrites the lock")
+    args = ap.parse_args()
+
+    with pdfplumber.open(args.pdf) as doc:
         text = "\n".join(page.extract_text(layout=True) for page in doc.pages)
     lines = text.splitlines()
-    items = parse_nutrition(lines)
+    items, errors = parse_nutrition(lines)
     allergens = parse_allergens(lines)
     keys = list(allergens)
 
-    unmatched = []
+    used, no_allergens = set(), []
     for i, it in enumerate(items, 1):
         it["id"] = i
         k = norm(it["name"])
-        hit = allergens.get(k)
-        if not hit:
+        if k not in allergens:
             close = difflib.get_close_matches(k, keys, n=1, cutoff=0.9)
-            hit = allergens.get(close[0]) if close else None
+            k = close[0] if close else None
+        hit = allergens.get(k) if k else None
+        used.add(k)
         it["allergens"] = {
             "contains": describe(hit["contains"]) if hit else [],
             "may_contain": describe(hit["may_contain"]) if hit else [],
         }
         if not hit:
-            unmatched.append(it["name"])
+            no_allergens.append(it["name"])
 
-    with open(out, "w", encoding="utf-8") as f:
-        json.dump({"source": pdf.split("/")[-1], "legend": ALLERGEN_LEGEND,
+    # Check: every row of the allergen table must belong to a product. If one doesn't,
+    # names drifted apart and that product would silently show "no allergens".
+    for k in keys:
+        if k not in used:
+            errors.append(f"allergen row matches no product: {allergens[k]['_name']!r}")
+    if not allergens:
+        errors.insert(0, "allergen table not found (heading changed?)")
+    if not items:
+        errors.insert(0, "no products found (table headings changed?)")
+    if errors:
+        fail(errors)
+
+    print(f"Parsed {len(items)} products, {len(allergens)} allergen rows; "
+          f"{len(no_allergens)} products have no allergens listed")
+
+    lock = Path(args.lock)
+    new_lines = lock_lines(items)
+    pdf_hash = hashlib.sha256(Path(args.pdf).read_bytes()).hexdigest()
+    old_hash, old_lines = read_lock(lock)
+
+    if args.check:
+        stale = "Run `python parse_pdf.py` locally, review the report and commit products.lock."
+        if old_hash != pdf_hash:
+            report(old_lines, new_lines)
+            fail(["nutrition_table.pdf changed but products.lock wasn't updated for it"], stale,
+                 "products.lock is out of date")
+        if old_lines != new_lines:
+            report(old_lines, new_lines)
+            fail(["same PDF, but the parser output differs from products.lock "
+                  "(parse_pdf.py or textnorm.py changed?)"], stale, "products.lock is out of date")
+        print("products.lock matches the PDF and the parser output")
+    elif old_lines:
+        removed = report(old_lines, new_lines)
+        if old_lines and len(removed) / len(old_lines) > MAX_REMOVED_SHARE and not args.force:
+            fail([f"{len(removed)} of {len(old_lines)} products disappeared (limit "
+                  f"{MAX_REMOVED_SHARE:.0%}). If that's real, re-run with --force."])
+
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump({"source": Path(args.pdf).name, "legend": ALLERGEN_LEGEND,
                    "items": items}, f, ensure_ascii=False, indent=1)
-    print(f"Parsed {len(items)} items, {len(allergens)} allergen rows -> {out}")
-    print(f"{len(unmatched)} items without an allergen row (the PDF says these have none)")
+    if args.check:
+        print(f"Wrote {args.out}")
+        return
+    lock.write_text(LOCK_HEADER + pdf_hash + "\n" + "\n".join(new_lines) + "\n", encoding="utf-8")
+    print(f"Wrote {args.out} and {lock.name}")
 
 
 if __name__ == "__main__":
-    main(*(sys.argv[1:3] if len(sys.argv) >= 3 else ("nutrient_table.pdf", "data.json")))
+    main()

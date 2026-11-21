@@ -3,8 +3,8 @@ FROM python:3.15-slim AS parse
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY parse_pdf.py textnorm.py nutrient_table.pdf ./
-RUN python parse_pdf.py nutrient_table.pdf data.json
+COPY parse_pdf.py textnorm.py nutrition_table.pdf products.lock ./
+RUN python parse_pdf.py nutrition_table.pdf data.json --check
 
 # Stage 2: runtime
 FROM python:3.15-slim
